@@ -20,10 +20,10 @@ pub trait HashTable<K: Hash + Eq, V> {
     fn remove(&mut self, key: &K) -> Option<V>;
 
     /// Returns the most recent key-value pair that was either inserted or updated and is still present
-    fn get_last(&self, _key: &K) -> Option<&V>;
+    fn get_last(&self) -> Option<(&K, &V)>;
 
     /// Returns the least recent key-value pair that was either inserted or updated and is still present
-    fn get_first(&self, _key: &K) -> Option<&V>;
+    fn get_first(&self) -> Option<(&K, &V)>;
 
     /// Returns the number of map entries
     fn len(&self) -> usize;
@@ -33,7 +33,8 @@ pub trait HashTable<K: Hash + Eq, V> {
 #[repr(u8)]
 enum Entry<K, V> {
     Empty,
-    Occupied(K, V),
+    /// Occupied contains Key, Value and the index to the ordered vector
+    Occupied(K, V, usize),
     Deleted,
 }
 
@@ -50,10 +51,10 @@ pub struct StrHashTable {
     // Even if the values are a separate structure and we incur one indirection, the Key is still
     // inlined (100%, thanks to CompactString) and so searching for the item should still benefit
     // from cache locality
-    buckets: Vec<Entry<SKeyType, usize>>,
-    // The Values of the map per insertion order. Deleted items are set to None, so indices are
+    buckets: Vec<Entry<SKeyType, SValueType>>,
+    // The indices per insertion order. Deleted items are set to None, so indices are
     // kept valid and we don't incur the traditional runtime penalty of really removing the items
-    elements: Vec<Option<SValueType>>,
+    by_insertion: Vec<Option<usize>>,
     // the map capacity (cache)
     capacity: usize,
     // Number of map entries
@@ -73,7 +74,7 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
             buckets,
             capacity,
             size: 0,
-            elements: Vec::new(),
+            by_insertion: Vec::new(),
             _first: None,
             _last: None,
         }
@@ -86,8 +87,8 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
             let bucket_i = (h + i) & (self.capacity - 1);
             if let Entry::Empty = self.buckets[bucket_i] {
                 println!("Adding to position {}", bucket_i);
-                self.elements.push(Some(value));
-                self.buckets[bucket_i] = Entry::Occupied(key, self.elements.len() - 1);
+                self.by_insertion.push(Some(bucket_i));
+                self.buckets[bucket_i] = Entry::Occupied(key, value, self.by_insertion.len() - 1);
                 self.size += 1;
                 return Ok(());
             }
@@ -103,9 +104,9 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
         for i in 0..max_attempts {
             let bucket_i = (h + i) & (self.capacity - 1);
             match &self.buckets[bucket_i] {
-                Entry::Occupied(k, value) if k == key => {
-                    println!("Found in position {}", bucket_i);
-                    return self.elements[*value].as_ref();
+                Entry::Occupied(k, value, insertion_i) if k == key => {
+                    println!("Found! Slot: {} order: {}", bucket_i, insertion_i);
+                    return Some(value);
                 }
                 Entry::Empty => return None,
                 _ => continue,
@@ -121,16 +122,15 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
         for i in 0..max_attempts {
             let bucket_i = (h + i) & (self.capacity - 1);
             match &self.buckets[bucket_i] {
-                Entry::Occupied(k, v) if k == key => {
+                Entry::Occupied(k, v, insertion_i) if k == key => {
                     // Copy the index
-                    let element_i = *v;
-                    // Set slot as deleted (tombstoning)
+                    let value = *v;
+                    // Set the reverse index (insertion) to None
+                    self.by_insertion[*insertion_i] = None;
+                    // Set slot as deleted (tomb-stoning)
                     self.buckets[bucket_i] = Entry::Deleted;
-                    // Take the actual value
-                    let value = self.elements[element_i].take();
-                    // Reduce count
                     self.size -= 1;
-                    return value;
+                    return Some(value);
                 }
                 Entry::Empty => return None,
                 _ => continue,
@@ -140,12 +140,12 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
     }
 
     /// returns the most recent key-value pair that was either inserted or updated and is still present,
-    fn get_last(&self, _key: &SKeyType) -> Option<&SValueType> {
+    fn get_last(&self) -> Option<(&SKeyType, &SValueType)> {
         None
     }
 
     /// returns the least recent key-value pair that was either inserted or updated and is still present
-    fn get_first(&self, _key: &SKeyType) -> Option<&SValueType> {
+    fn get_first(&self) -> Option<(&SKeyType, &SValueType)> {
         None
     }
 
