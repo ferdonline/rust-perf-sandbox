@@ -17,7 +17,7 @@ pub trait HashTable<K: Hash + Eq, V> {
     fn get(&self, key: impl Borrow<str>) -> Option<&V>;
 
     /// Remove an entry from the map
-    fn remove(&mut self, key: &K) -> Option<V>;
+    fn remove(&mut self, key: impl Borrow<str>) -> Option<V>;
 
     /// Returns the most recent key-value pair that was either inserted or updated and is still present
     fn get_last(&self) -> Option<(&K, &V)>;
@@ -59,10 +59,10 @@ pub struct StrHashTable {
     capacity: usize,
     // Number of map entries
     size: usize,
-    // Index of the first inserted still valid
-    _first: Option<usize>,
+    // Index of the first inserted still valid. Keep both indices (insertion and hash bucket)
+    first: Option<(usize, usize)>,
     // Index of the last inserted still valid
-    _last: Option<usize>,
+    last: Option<(usize, usize)>,
 }
 
 impl HashTable<SKeyType, SValueType> for StrHashTable {
@@ -75,8 +75,8 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
             capacity,
             size: 0,
             by_insertion: Vec::new(),
-            _first: None,
-            _last: None,
+            first: None,
+            last: None,
         }
     }
 
@@ -86,9 +86,15 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
         for i in 0..max_attempts {
             let bucket_i = (h + i) & (self.capacity - 1);
             if let Entry::Empty = self.buckets[bucket_i] {
-                println!("Adding to position {}", bucket_i);
+                // Cross reference structures. Bucket contains K,V and insertion index. Insertion tracks bucket index
+                println!("Adding to bucket {}", bucket_i);
                 self.by_insertion.push(Some(bucket_i));
-                self.buckets[bucket_i] = Entry::Occupied(key, value, self.by_insertion.len() - 1);
+                let insertion_i = self.by_insertion.len() - 1;
+                self.buckets[bucket_i] = Entry::Occupied(key, value, insertion_i);
+                if self.first.is_none() {
+                    self.first = Some((insertion_i, bucket_i));
+                }
+                self.last = Some((insertion_i, bucket_i));
                 self.size += 1;
                 return Ok(());
             }
@@ -116,20 +122,37 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
     }
 
     // Remove using linear probing and tombstoning (mark as Deleted)
-    fn remove(&mut self, key: &SKeyType) -> Option<SValueType> {
-        let h = fxhash(&key);
+    fn remove(&mut self, key: impl Borrow<str>) -> Option<SValueType> {
+        let key = key.borrow();
+        let h = fxhash(key);
         let max_attempts = (0.75 * (self.capacity as f64)) as usize;
         for i in 0..max_attempts {
             let bucket_i = (h + i) & (self.capacity - 1);
-            match &self.buckets[bucket_i] {
-                Entry::Occupied(k, v, insertion_i) if k == key => {
-                    // Copy the index
-                    let value = *v;
-                    // Set the reverse index (insertion) to None
-                    self.by_insertion[*insertion_i] = None;
-                    // Set slot as deleted (tomb-stoning)
-                    self.buckets[bucket_i] = Entry::Deleted;
+            match self.buckets[bucket_i] {
+                Entry::Occupied(ref k, value, insertion_i) if k == key => {
                     self.size -= 1;
+
+                    self.buckets[bucket_i] = Entry::Deleted; // Set slot as deleted (tomb-stoning)
+
+                    self.by_insertion[insertion_i] = None; // Respective insertion index also pointing nowhere
+
+                    // Now update first/last
+                    // If we delete an item which is neither first or last this should be no-op
+                    // Let's update last. We can pop items to reuse memory
+                    while self.by_insertion.pop_if(|e| e.is_none()).is_some() {}
+                    self.last = self.by_insertion.last().map(|index| {
+                        let index = index.expect("No trailing Nones");
+                        (self.by_insertion.len() - 1, index)
+                    });
+
+                    // We might have deleted the first, let's advance (No removing, otherwise insertion_indices invalidate)
+                    let cur_first = self.first.expect("At least len 1").0;
+                    for i in cur_first..self.by_insertion.len() {
+                        if let Some(bucket_i) = self.by_insertion[i] {
+                            self.first = Some((i, bucket_i));
+                            break;
+                        }
+                    }
                     return Some(value);
                 }
                 Entry::Empty => return None,
@@ -141,12 +164,20 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
 
     /// returns the most recent key-value pair that was either inserted or updated and is still present,
     fn get_last(&self) -> Option<(&SKeyType, &SValueType)> {
-        None
+        self.last
+            .map(|(_, bucket_i)| match &self.buckets[bucket_i] {
+                Entry::Occupied(key, value, _) => (key, value),
+                _ => panic!("Index to deleted entry"),
+            })
     }
 
     /// returns the least recent key-value pair that was either inserted or updated and is still present
     fn get_first(&self) -> Option<(&SKeyType, &SValueType)> {
-        None
+        self.first
+            .map(|(_, bucket_i)| match &self.buckets[bucket_i] {
+                Entry::Occupied(key, value, _) => (key, value),
+                _ => panic!("Index to deleted entry"),
+            })
     }
 
     fn len(&self) -> usize {
@@ -159,8 +190,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_x() {
+    fn test_base_insert() {
         let mut table = StrHashTable::new(1000);
+        assert_eq!(table.get("World"), None);
 
         table.insert("Hello".into(), 1).unwrap();
         table.insert("World".into(), 2).unwrap();
@@ -171,5 +203,24 @@ mod tests {
         assert_eq!(table.get("Hello").unwrap(), &1);
         assert_eq!(table.get("World").unwrap(), &2);
         assert_eq!(table.get("Fer").unwrap(), &3);
+
+        // And remove
+        table.remove("World");
+        assert_eq!(table.get("World"), None);
+    }
+
+    #[test]
+    fn test_base_first_last() {
+        let mut table = StrHashTable::new(1000);
+        assert_eq!(table.get_first(), None);
+        assert_eq!(table.get_last(), None);
+
+        table.insert("Hello".into(), 1).unwrap();
+        assert_eq!(table.get_first().unwrap(), (&"Hello".into(), &1));
+        assert_eq!(table.get_last().unwrap(), (&"Hello".into(), &1));
+
+        table.insert("World".into(), 2).unwrap();
+        assert_eq!(table.get_first().unwrap(), (&"Hello".into(), &1));
+        assert_eq!(table.get_last().unwrap(), (&"World".into(), &2));
     }
 }
