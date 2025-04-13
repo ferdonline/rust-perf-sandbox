@@ -87,7 +87,7 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
                 && key == k
             {
                 *v = value;
-            } else if let Entry::Empty = self.buckets[bucket_i] {
+            } else if let Entry::Empty | Entry::Deleted = self.buckets[bucket_i] {
                 // Cross reference structures. Bucket contains K,V and insertion index. Insertion tracks bucket index
                 #[cfg(test)]
                 println!("Adding to bucket {}", bucket_i);
