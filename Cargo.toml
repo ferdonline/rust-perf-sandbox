@@ -7,4 +7,8 @@ edition = "2021"
 [dependencies]
 compact_str = { version = "0.9.0", default-features = false}
 fxhash = { version = "0.2.1", default-features = false}
+measure_time = "0.9.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 unix-print = "0.1.0"
+ureq = { version = "3.0.10", default-features = false, features = ["_tls", "rustls"] }

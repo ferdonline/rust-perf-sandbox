@@ -28,6 +28,9 @@ pub trait HashTable<K: Hash + Eq, V> {
 
     /// Returns the number of map entries
     fn len(&self) -> usize;
+
+    /// Returns the number of map entries
+    fn is_empty(&self) -> bool;
 }
 
 #[derive(Debug)]
@@ -102,7 +105,7 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
                 return Ok(());
             }
         }
-        return Err("Could not insert. No sufficient slots");
+        Err("Could not insert. No sufficient slots")
     }
 
     // Lookup using linear probing
@@ -183,6 +186,10 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
 
     fn len(&self) -> usize {
         self.size
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
