@@ -3,6 +3,7 @@ use compact_str::CompactString;
 use core::{borrow::Borrow, hash::Hash};
 use fxhash::hash as fxhash;
 
+#[cfg(test)]
 use unix_print::unix_println as println;
 
 /// A generic Hash table which keeps insertion history
@@ -82,8 +83,13 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
         let max_attempts = (0.75 * (self.capacity as f64)) as usize;
         for i in 0..max_attempts {
             let bucket_i = (h + i) & (self.capacity - 1);
-            if let Entry::Empty = self.buckets[bucket_i] {
+            if let Entry::Occupied(k, v, _) = &mut self.buckets[bucket_i]
+                && key == k
+            {
+                *v = value;
+            } else if let Entry::Empty = self.buckets[bucket_i] {
                 // Cross reference structures. Bucket contains K,V and insertion index. Insertion tracks bucket index
+                #[cfg(test)]
                 println!("Adding to bucket {}", bucket_i);
                 self.by_insertion.push(Some(bucket_i));
                 let insertion_i = self.by_insertion.len() - 1;
@@ -107,8 +113,9 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
         for i in 0..max_attempts {
             let bucket_i = (h + i) & (self.capacity - 1);
             match &self.buckets[bucket_i] {
-                Entry::Occupied(k, value, insertion_i) if k == key => {
-                    println!("Found! Slot: {} order: {}", bucket_i, insertion_i);
+                Entry::Occupied(k, value, _insertion_i) if k == key => {
+                    #[cfg(test)]
+                    println!("Found! Slot: {} order: {}", bucket_i, _insertion_i);
                     return Some(value);
                 }
                 Entry::Empty => return None,
