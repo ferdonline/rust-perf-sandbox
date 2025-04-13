@@ -44,13 +44,10 @@ type SValueType = u32;
 #[derive(Debug)]
 pub struct StrHashTable {
     // The map entries
-    // @note: Because we need to track latest and first the buckets don't hold the Values
-    // but the index of the element as per insertion order (next field)
+    // @note: Because we need to track latest and first the buckets also hold
+    // the index of the element as per insertion order (next field)
     // Keeping an index is a simple way in rust to keep a reference without using cells and
     // other Rust structures which would incur a runtime penalty.
-    // Even if the values are a separate structure and we incur one indirection, the Key is still
-    // inlined (100%, thanks to CompactString) and so searching for the item should still benefit
-    // from cache locality
     buckets: Vec<Entry<SKeyType, SValueType>>,
     // The indices per insertion order. Deleted items are set to None, so indices are
     // kept valid and we don't incur the traditional runtime penalty of really removing the items
@@ -146,13 +143,10 @@ impl HashTable<SKeyType, SValueType> for StrHashTable {
                     });
 
                     // We might have deleted the first, let's advance (No removing, otherwise insertion_indices invalidate)
-                    let cur_first = self.first.expect("At least len 1").0;
-                    for i in cur_first..self.by_insertion.len() {
-                        if let Some(bucket_i) = self.by_insertion[i] {
-                            self.first = Some((i, bucket_i));
-                            break;
-                        }
-                    }
+                    let cur_first = self.first.expect("Had at least len 1").0;
+                    self.first = (cur_first..self.by_insertion.len())
+                        .find_map(|i| self.by_insertion[i].map(|bucket| (i, bucket)));
+
                     return Some(value);
                 }
                 Entry::Empty => return None,
@@ -205,7 +199,8 @@ mod tests {
         assert_eq!(table.get("Fer").unwrap(), &3);
 
         // And remove
-        table.remove("World");
+        let out = table.remove("World");
+        assert_eq!(out, Some(2));
         assert_eq!(table.get("World"), None);
     }
 
@@ -222,5 +217,35 @@ mod tests {
         table.insert("World".into(), 2).unwrap();
         assert_eq!(table.get_first().unwrap(), (&"Hello".into(), &1));
         assert_eq!(table.get_last().unwrap(), (&"World".into(), &2));
+    }
+
+    #[test]
+    fn test_advanced_first_last() {
+        let mut table = StrHashTable::new(1000);
+        table.insert("Hello".into(), 1).unwrap();
+        table.insert("World".into(), 2).unwrap();
+
+        table.remove("Hello");
+        assert_eq!(table.get_first().unwrap(), (&"World".into(), &2));
+        assert_eq!(table.get_last().unwrap(), (&"World".into(), &2));
+
+        table.remove("World");
+        assert_eq!(table.get_first(), None);
+        assert_eq!(table.get_last(), None);
+    }
+
+    #[test]
+    fn test_advanced_last_first() {
+        let mut table = StrHashTable::new(1000);
+        table.insert("Hello".into(), 1).unwrap();
+        table.insert("World".into(), 2).unwrap();
+
+        table.remove("World");
+        assert_eq!(table.get_first().unwrap(), (&"Hello".into(), &1));
+        assert_eq!(table.get_last().unwrap(), (&"Hello".into(), &1));
+
+        table.remove("Hello");
+        assert_eq!(table.get_first(), None);
+        assert_eq!(table.get_last(), None);
     }
 }
